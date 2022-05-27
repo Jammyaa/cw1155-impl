@@ -3,11 +3,12 @@
 NODE="http://65.108.128.139:2281"
 ACCOUNT="Developer"
 CHAINID="anone-testnet-1"
-CONTRACT_DIR="artifacts/anone_nft_marketplace.wasm"
+CONTRACT_DIR="artifacts/cw1155_impl.wasm"
 SLEEP_TIME="15s"
 
-INIT="{\"name\": \"Anone NFT Marketplace Contract\"}"
-INIT_JSON=$(anoned tx wasm instantiate "81" "$INIT" --from "$ACCOUNT" --label "anone-nft-marketplace" -y --chain-id "$CHAINID" --node "$NODE" --gas 180000 --fees 100000uan1 -o json)
+MINTER=$(anoned keys show $ACCOUNT -a)
+INIT="{\"minter\": \"$MINTER\"}"
+INIT_JSON=$(anoned tx wasm instantiate "82" "$INIT" --from "$ACCOUNT" --label "cw1155-impl" -y --chain-id "$CHAINID" --node "$NODE" --gas 180000 --fees 0uan1 -o json)
 
 echo "INIT_JSON = $INIT_JSON"
 
