@@ -4,11 +4,10 @@ use std::fs::create_dir_all;
 use cosmwasm_schema::{export_schema, remove_schemas, schema_for};
 
 use cw1155::{
-    ApprovedForAllResponse, BalanceResponse, BatchBalanceResponse, Cw1155BatchReceiveMsg,
-    Cw1155ExecuteMsg, Cw1155QueryMsg, Cw1155ReceiveMsg, IsApprovedForAllResponse,
+    ApprovedForAllResponse, BalanceResponse, BatchBalanceResponse, Cw1155BatchReceiveMsg, Cw1155ReceiveMsg, IsApprovedForAllResponse,
     TokenInfoResponse, TokensResponse,
 };
-use cw1155_impl::msg::InstantiateMsg;
+use cw1155_impl::msg::{InstantiateMsg, ExecuteMsg, QueryMsg};
 
 fn main() {
     let mut out_dir = current_dir().unwrap();
@@ -17,8 +16,8 @@ fn main() {
     remove_schemas(&out_dir).unwrap();
 
     export_schema(&schema_for!(InstantiateMsg), &out_dir);
-    export_schema(&schema_for!(Cw1155ExecuteMsg), &out_dir);
-    export_schema(&schema_for!(Cw1155QueryMsg), &out_dir);
+    export_schema(&schema_for!(ExecuteMsg), &out_dir);
+    export_schema(&schema_for!(QueryMsg), &out_dir);
     export_schema(&schema_for!(Cw1155ReceiveMsg), &out_dir);
     export_schema(&schema_for!(Cw1155BatchReceiveMsg), &out_dir);
     export_schema(&schema_for!(BalanceResponse), &out_dir);
