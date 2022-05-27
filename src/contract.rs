@@ -7,20 +7,23 @@ use cw_storage_plus::Bound;
 
 use cw1155::{
     ApproveAllEvent, ApprovedForAllResponse, BalanceResponse, BatchBalanceResponse,
-    Cw1155BatchReceiveMsg, Cw1155ExecuteMsg, Cw1155QueryMsg, Cw1155ReceiveMsg, Expiration,
+    Cw1155BatchReceiveMsg, Cw1155ReceiveMsg, Expiration,
     IsApprovedForAllResponse, TokenId, TokenInfoResponse, TokensResponse, TransferEvent,
 };
 use cw2::set_contract_version;
 use cw_utils::{maybe_addr, Event};
 
 use crate::error::ContractError;
-use crate::msg::InstantiateMsg;
-use crate::state::{APPROVES, BALANCES, MINTER, TOKENS};
+use crate::msg::{InstantiateMsg, ExecuteMsg, QueryMsg};
+use crate::query::ContractInfoResponse;
+use crate::state::{APPROVES, BALANCES, CONTRACT_INFO, MINTER, TOKENS};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw1155-base";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// governance parameters
+const MAX_TOKEN_LIMIT: u32 = 1000000;
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 30;
 
@@ -30,11 +33,34 @@ pub fn instantiate(
     _env: Env,
     _info: MessageInfo,
     msg: InstantiateMsg,
-) -> StdResult<Response> {
+) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    // Check the number of tokens is more than zero and less than the max limit
+    if msg.num_tokens == 0 || msg.num_tokens > MAX_TOKEN_LIMIT {
+        return Err(ContractError::InvalidNumTokens {
+            min: 1,
+            max: MAX_TOKEN_LIMIT,
+        });
+    }
+
     let minter = deps.api.addr_validate(&msg.minter)?;
     MINTER.save(deps.storage, &minter)?;
-    Ok(Response::default())
+
+    // cw721 instantiation
+    let info = ContractInfoResponse {
+        name: msg.name,
+        symbol: msg.symbol,
+        minter: msg.minter,
+        num_tokens: msg.num_tokens
+    };
+    CONTRACT_INFO.save(deps.storage, &info)?;
+
+    Ok(Response::default()
+        .add_attribute("action", "instantiate")
+        .add_attribute("contract_name", CONTRACT_NAME)
+        .add_attribute("contract_version", CONTRACT_VERSION)
+        .add_attribute("minter", minter))
 }
 
 /// To mitigate clippy::too_many_arguments warning
@@ -49,40 +75,40 @@ pub fn execute(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    msg: Cw1155ExecuteMsg,
+    msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     let env = ExecuteEnv { deps, env, info };
     match msg {
-        Cw1155ExecuteMsg::SendFrom {
+        ExecuteMsg::SendFrom {
             from,
             to,
             token_id,
             value,
             msg,
         } => execute_send_from(env, from, to, token_id, value, msg),
-        Cw1155ExecuteMsg::BatchSendFrom {
+        ExecuteMsg::BatchSendFrom {
             from,
             to,
             batch,
             msg,
         } => execute_batch_send_from(env, from, to, batch, msg),
-        Cw1155ExecuteMsg::Mint {
+        ExecuteMsg::Mint {
             to,
             token_id,
             value,
             msg,
         } => execute_mint(env, to, token_id, value, msg),
-        Cw1155ExecuteMsg::BatchMint { to, batch, msg } => execute_batch_mint(env, to, batch, msg),
-        Cw1155ExecuteMsg::Burn {
+        ExecuteMsg::BatchMint { to, batch, msg } => execute_batch_mint(env, to, batch, msg),
+        ExecuteMsg::Burn {
             from,
             token_id,
             value,
         } => execute_burn(env, from, token_id, value),
-        Cw1155ExecuteMsg::BatchBurn { from, batch } => execute_batch_burn(env, from, batch),
-        Cw1155ExecuteMsg::ApproveAll { operator, expires } => {
+        ExecuteMsg::BatchBurn { from, batch } => execute_batch_burn(env, from, batch),
+        ExecuteMsg::ApproveAll { operator, expires } => {
             execute_approve_all(env, operator, expires)
         }
-        Cw1155ExecuteMsg::RevokeAll { operator } => execute_revoke_all(env, operator),
+        ExecuteMsg::RevokeAll { operator } => execute_revoke_all(env, operator),
     }
 }
 
@@ -416,16 +442,16 @@ pub fn execute_revoke_all(env: ExecuteEnv, operator: String) -> Result<Response,
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, env: Env, msg: Cw1155QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        Cw1155QueryMsg::Balance { owner, token_id } => {
+        QueryMsg::Balance { owner, token_id } => {
             let owner_addr = deps.api.addr_validate(&owner)?;
             let balance = BALANCES
                 .may_load(deps.storage, (&owner_addr, &token_id))?
                 .unwrap_or_default();
             to_binary(&BalanceResponse { balance })
         }
-        Cw1155QueryMsg::BatchBalance { owner, token_ids } => {
+        QueryMsg::BatchBalance { owner, token_ids } => {
             let owner_addr = deps.api.addr_validate(&owner)?;
             let balances = token_ids
                 .into_iter()
@@ -437,13 +463,13 @@ pub fn query(deps: Deps, env: Env, msg: Cw1155QueryMsg) -> StdResult<Binary> {
                 .collect::<StdResult<_>>()?;
             to_binary(&BatchBalanceResponse { balances })
         }
-        Cw1155QueryMsg::IsApprovedForAll { owner, operator } => {
+        QueryMsg::IsApprovedForAll { owner, operator } => {
             let owner_addr = deps.api.addr_validate(&owner)?;
             let operator_addr = deps.api.addr_validate(&operator)?;
             let approved = check_can_approve(deps, &env, &owner_addr, &operator_addr)?;
             to_binary(&IsApprovedForAllResponse { approved })
         }
-        Cw1155QueryMsg::ApprovedForAll {
+        QueryMsg::ApprovedForAll {
             owner,
             include_expired,
             start_after,
@@ -460,11 +486,11 @@ pub fn query(deps: Deps, env: Env, msg: Cw1155QueryMsg) -> StdResult<Binary> {
                 limit,
             )?)
         }
-        Cw1155QueryMsg::TokenInfo { token_id } => {
+        QueryMsg::TokenInfo { token_id } => {
             let url = TOKENS.load(deps.storage, &token_id)?;
             to_binary(&TokenInfoResponse { url })
         }
-        Cw1155QueryMsg::Tokens {
+        QueryMsg::Tokens {
             owner,
             start_after,
             limit,
@@ -472,8 +498,11 @@ pub fn query(deps: Deps, env: Env, msg: Cw1155QueryMsg) -> StdResult<Binary> {
             let owner_addr = deps.api.addr_validate(&owner)?;
             to_binary(&query_tokens(deps, owner_addr, start_after, limit)?)
         }
-        Cw1155QueryMsg::AllTokens { start_after, limit } => {
+        QueryMsg::AllTokens { start_after, limit } => {
             to_binary(&query_all_tokens(deps, start_after, limit)?)
+        }
+        QueryMsg::ContractInfo {} => {
+            to_binary(&query_contract_info(deps)?)
         }
     }
 }
@@ -482,6 +511,16 @@ fn build_approval(item: StdResult<(Addr, Expiration)>) -> StdResult<cw1155::Appr
     item.map(|(addr, expires)| cw1155::Approval {
         spender: addr.into(),
         expires,
+    })
+}
+
+fn query_contract_info(deps: Deps) -> StdResult<ContractInfoResponse> {
+    let contract_info = CONTRACT_INFO.load(deps.storage)?;
+    Ok(ContractInfoResponse {
+        name: contract_info.name,
+        symbol: contract_info.symbol,
+        minter: contract_info.minter,
+        num_tokens: contract_info.num_tokens
     })
 }
 
@@ -537,6 +576,7 @@ fn query_all_tokens(
     Ok(TokensResponse { tokens })
 }
 
+
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
@@ -568,18 +608,24 @@ mod tests {
         let token2 = "token2".to_owned();
         let token3 = "token3".to_owned();
         let minter = String::from("minter");
+        let name = String::from("Fractional NFT Collection");
+        let num_tokens = 1000000;
+        let symbol = String::from("FNC");
         let user1 = String::from("user1");
         let user2 = String::from("user2");
 
         let mut deps = mock_dependencies();
         let msg = InstantiateMsg {
             minter: minter.clone(),
+            name: name.clone(),
+            symbol: symbol.clone(),
+            num_tokens: num_tokens,
         };
         let res = instantiate(deps.as_mut(), mock_env(), mock_info("operator", &[]), msg).unwrap();
         assert_eq!(0, res.messages.len());
 
         // invalid mint, user1 don't mint permission
-        let mint_msg = Cw1155ExecuteMsg::Mint {
+        let mint_msg = ExecuteMsg::Mint {
             to: user1.clone(),
             token_id: token1.clone(),
             value: 1u64.into(),
@@ -619,14 +665,14 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::Balance {
+                QueryMsg::Balance {
                     owner: user1.clone(),
                     token_id: token1.clone(),
                 }
             ),
         );
 
-        let transfer_msg = Cw1155ExecuteMsg::SendFrom {
+        let transfer_msg = ExecuteMsg::SendFrom {
             from: user1.clone(),
             to: user2.clone(),
             token_id: token1.clone(),
@@ -650,7 +696,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(user1.as_ref(), &[]),
-            Cw1155ExecuteMsg::ApproveAll {
+            ExecuteMsg::ApproveAll {
                 operator: minter.clone(),
                 expires: None,
             },
@@ -679,7 +725,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::Balance {
+                QueryMsg::Balance {
                     owner: user2.clone(),
                     token_id: token1.clone(),
                 }
@@ -692,7 +738,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::Balance {
+                QueryMsg::Balance {
                     owner: user1.clone(),
                     token_id: token1.clone(),
                 }
@@ -708,7 +754,7 @@ mod tests {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(minter.as_ref(), &[]),
-                Cw1155ExecuteMsg::BatchMint {
+                ExecuteMsg::BatchMint {
                     to: user2.clone(),
                     batch: vec![(token2.clone(), 1u64.into()), (token3.clone(), 1u64.into())],
                     msg: None
@@ -727,7 +773,7 @@ mod tests {
         );
 
         // invalid batch transfer, (user2 not approved yet)
-        let batch_transfer_msg = Cw1155ExecuteMsg::BatchSendFrom {
+        let batch_transfer_msg = ExecuteMsg::BatchSendFrom {
             from: user2.clone(),
             to: user1.clone(),
             batch: vec![
@@ -752,7 +798,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(user2.as_ref(), &[]),
-            Cw1155ExecuteMsg::ApproveAll {
+            ExecuteMsg::ApproveAll {
                 operator: minter.clone(),
                 expires: None,
             },
@@ -791,7 +837,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::BatchBalance {
+                QueryMsg::BatchBalance {
                     owner: user1.clone(),
                     token_ids: vec![token1.clone(), token2.clone(), token3.clone()],
                 }
@@ -806,7 +852,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(user1.as_ref(), &[]),
-            Cw1155ExecuteMsg::RevokeAll {
+            ExecuteMsg::RevokeAll {
                 operator: minter.clone(),
             },
         )
@@ -817,7 +863,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::IsApprovedForAll {
+                QueryMsg::IsApprovedForAll {
                     owner: user1.clone(),
                     operator: minter.clone(),
                 }
@@ -831,7 +877,7 @@ mod tests {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(minter.as_ref(), &[]),
-                Cw1155ExecuteMsg::SendFrom {
+                ExecuteMsg::SendFrom {
                     from: user1.clone(),
                     to: user2,
                     token_id: token1.clone(),
@@ -848,7 +894,7 @@ mod tests {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(user1.as_ref(), &[]),
-                Cw1155ExecuteMsg::Burn {
+                ExecuteMsg::Burn {
                     from: user1.clone(),
                     token_id: token1.clone(),
                     value: 1u64.into(),
@@ -868,7 +914,7 @@ mod tests {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(user1.as_ref(), &[]),
-                Cw1155ExecuteMsg::BatchBurn {
+                ExecuteMsg::BatchBurn {
                     from: user1.clone(),
                     batch: vec![(token2.clone(), 1u64.into()), (token3.clone(), 1u64.into())]
                 }
@@ -890,6 +936,9 @@ mod tests {
     fn check_send_contract() {
         let receiver = String::from("receive_contract");
         let minter = String::from("minter");
+        let name = String::from("Fractional NFT Collection");
+        let num_tokens = 1000000;
+        let symbol = String::from("FNC");
         let user1 = String::from("user1");
         let token1 = "token1".to_owned();
         let token2 = "token2".to_owned();
@@ -898,6 +947,9 @@ mod tests {
         let mut deps = mock_dependencies();
         let msg = InstantiateMsg {
             minter: minter.clone(),
+            name: name.clone(),
+            symbol: symbol.clone(),
+            num_tokens: num_tokens,
         };
         let res = instantiate(deps.as_mut(), mock_env(), mock_info("operator", &[]), msg).unwrap();
         assert_eq!(0, res.messages.len());
@@ -906,7 +958,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(minter.as_ref(), &[]),
-            Cw1155ExecuteMsg::Mint {
+            ExecuteMsg::Mint {
                 to: user1.clone(),
                 token_id: token2.clone(),
                 value: 1u64.into(),
@@ -921,7 +973,7 @@ mod tests {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(minter.as_ref(), &[]),
-                Cw1155ExecuteMsg::Mint {
+                ExecuteMsg::Mint {
                     to: receiver.clone(),
                     token_id: token1.clone(),
                     value: 1u64.into(),
@@ -953,7 +1005,7 @@ mod tests {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(user1.as_ref(), &[]),
-                Cw1155ExecuteMsg::BatchSendFrom {
+                ExecuteMsg::BatchSendFrom {
                     from: user1.clone(),
                     to: receiver.clone(),
                     batch: vec![(token2.clone(), 1u64.into())],
@@ -987,10 +1039,16 @@ mod tests {
         let tokens = (0..10).map(|i| format!("token{}", i)).collect::<Vec<_>>();
         let users = (0..10).map(|i| format!("user{}", i)).collect::<Vec<_>>();
         let minter = String::from("minter");
+        let name = String::from("Fractional NFT Collection");
+        let num_tokens = 1000000;
+        let symbol = String::from("FNC");
 
         let mut deps = mock_dependencies();
         let msg = InstantiateMsg {
             minter: minter.clone(),
+            name: name.clone(),
+            symbol: symbol.clone(),
+            num_tokens: num_tokens,
         };
         let res = instantiate(deps.as_mut(), mock_env(), mock_info("operator", &[]), msg).unwrap();
         assert_eq!(0, res.messages.len());
@@ -999,7 +1057,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(minter.as_ref(), &[]),
-            Cw1155ExecuteMsg::BatchMint {
+            ExecuteMsg::BatchMint {
                 to: users[0].clone(),
                 batch: tokens
                     .iter()
@@ -1014,7 +1072,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::Tokens {
+                QueryMsg::Tokens {
                     owner: users[0].clone(),
                     start_after: None,
                     limit: Some(5),
@@ -1029,7 +1087,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::Tokens {
+                QueryMsg::Tokens {
                     owner: users[0].clone(),
                     start_after: Some("token5".to_owned()),
                     limit: Some(5),
@@ -1044,7 +1102,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::AllTokens {
+                QueryMsg::AllTokens {
                     start_after: Some("token5".to_owned()),
                     limit: Some(5),
                 },
@@ -1058,7 +1116,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::TokenInfo {
+                QueryMsg::TokenInfo {
                     token_id: "token5".to_owned()
                 },
             ),
@@ -1070,7 +1128,7 @@ mod tests {
                 deps.as_mut(),
                 mock_env(),
                 mock_info(users[0].as_ref(), &[]),
-                Cw1155ExecuteMsg::ApproveAll {
+                ExecuteMsg::ApproveAll {
                     operator: user.clone(),
                     expires: None,
                 },
@@ -1082,7 +1140,7 @@ mod tests {
             query(
                 deps.as_ref(),
                 mock_env(),
-                Cw1155QueryMsg::ApprovedForAll {
+                QueryMsg::ApprovedForAll {
                     owner: users[0].clone(),
                     include_expired: None,
                     start_after: Some(String::from("user2")),
@@ -1103,6 +1161,9 @@ mod tests {
         let mut deps = mock_dependencies();
         let token1 = "token1".to_owned();
         let minter = String::from("minter");
+        let name = String::from("Fractional NFT Collection");
+        let num_tokens = 1000000;
+        let symbol = String::from("FNC");
         let user1 = String::from("user1");
         let user2 = String::from("user2");
 
@@ -1114,6 +1175,9 @@ mod tests {
 
         let msg = InstantiateMsg {
             minter: minter.clone(),
+            name: name.clone(),
+            symbol: symbol.clone(),
+            num_tokens: num_tokens,
         };
         let res = instantiate(deps.as_mut(), env.clone(), mock_info("operator", &[]), msg).unwrap();
         assert_eq!(0, res.messages.len());
@@ -1122,7 +1186,7 @@ mod tests {
             deps.as_mut(),
             env.clone(),
             mock_info(minter.as_ref(), &[]),
-            Cw1155ExecuteMsg::Mint {
+            ExecuteMsg::Mint {
                 to: user1.clone(),
                 token_id: token1,
                 value: 1u64.into(),
@@ -1137,7 +1201,7 @@ mod tests {
                 deps.as_mut(),
                 env.clone(),
                 mock_info(user1.as_ref(), &[]),
-                Cw1155ExecuteMsg::ApproveAll {
+                ExecuteMsg::ApproveAll {
                     operator: user2.clone(),
                     expires: Some(Expiration::AtHeight(5)),
                 },
@@ -1149,14 +1213,14 @@ mod tests {
             deps.as_mut(),
             env.clone(),
             mock_info(user1.as_ref(), &[]),
-            Cw1155ExecuteMsg::ApproveAll {
+            ExecuteMsg::ApproveAll {
                 operator: user2.clone(),
                 expires: Some(Expiration::AtHeight(100)),
             },
         )
         .unwrap();
 
-        let query_msg = Cw1155QueryMsg::IsApprovedForAll {
+        let query_msg = QueryMsg::IsApprovedForAll {
             owner: user1,
             operator: user2,
         };
@@ -1182,11 +1246,17 @@ mod tests {
         let mut deps = mock_dependencies();
         let token1 = "token1".to_owned();
         let minter = String::from("minter");
+        let name = String::from("Fractional NFT Collection");
+        let num_tokens = 1000000;
+        let symbol = String::from("FNC");
         let user1 = String::from("user1");
 
         let env = mock_env();
         let msg = InstantiateMsg {
             minter: minter.clone(),
+            name: name.clone(),
+            symbol: symbol.clone(),
+            num_tokens: num_tokens,
         };
         let res = instantiate(deps.as_mut(), env.clone(), mock_info("operator", &[]), msg).unwrap();
         assert_eq!(0, res.messages.len());
@@ -1195,7 +1265,7 @@ mod tests {
             deps.as_mut(),
             env.clone(),
             mock_info(minter.as_ref(), &[]),
-            Cw1155ExecuteMsg::Mint {
+            ExecuteMsg::Mint {
                 to: user1.clone(),
                 token_id: token1.clone(),
                 value: u128::MAX.into(),
@@ -1209,7 +1279,7 @@ mod tests {
                 deps.as_mut(),
                 env,
                 mock_info(minter.as_ref(), &[]),
-                Cw1155ExecuteMsg::Mint {
+                ExecuteMsg::Mint {
                     to: user1,
                     token_id: token1,
                     value: 1u64.into(),

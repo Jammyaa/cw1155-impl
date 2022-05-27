@@ -1,6 +1,7 @@
 use cosmwasm_std::{Addr, Uint128};
 use cw1155::Expiration;
 use cw_storage_plus::{Item, Map};
+use crate::query::{ContractInfoResponse};
 
 /// Store the minter address who have permission to mint new tokens.
 pub const MINTER: Item<Addr> = Item::new("minter");
@@ -11,3 +12,5 @@ pub const APPROVES: Map<(&Addr, &Addr), Expiration> = Map::new("approves");
 /// Store the tokens metadata url, also supports enumerating tokens,
 /// An entry for token_id must exist as long as there's tokens in circulation.
 pub const TOKENS: Map<&str, String> = Map::new("tokens");
+/// Store contract info
+pub const CONTRACT_INFO: Item<ContractInfoResponse> = Item::new("contract_info");

@@ -11,4 +11,7 @@ pub enum ContractError {
 
     #[error("Expired")]
     Expired {},
+
+    #[error("InvalidNumTokens {max}, min: 1")]
+    InvalidNumTokens { max: u32, min: u32 },
 }
